@@ -53,11 +53,13 @@ adb install -r FixDynamicColorStatusBar-v1.0.0.apk
 
 Lalu di **LSPosed Manager**:
 
-1. Aktifkan modul **Dynamic Status Bar**.
-2. Centang aplikasi yang ikonnya bermasalah — misalnya **Pengaturan/Settings**,
-   **Launcher**, dan **System UI** (untuk layar recents).
-3. Force stop aplikasi tersebut, lalu buka lagi.
-4. Kalau belum berubah, reboot HP.
+1. **Matikan lalu aktifkan lagi** modul **Dynamic Status Bar**. Scope bawaan
+   (`xposedscope`) otomatis mencentang **System UI**, **Settings**, dan
+   **Launcher**.
+2. Tambahkan aplikasi lain kalau perlu.
+3. Force stop aplikasi yang di-scope, atau reboot HP.
+4. Kalau scope tetap kosong, centang manual: `com.android.systemui`,
+   `com.android.settings`, `com.miui.home`.
 
 Perubahan setting di layar modul berlaku saat aplikasi dibuka ulang.
 

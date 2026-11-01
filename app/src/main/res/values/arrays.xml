@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Scope bawaan modul (meta-data xposedscope). LSPosed otomatis
+        mencentang aplikasi di daftar ini saat modul di-enable.
+    -->
+    <string-array name="xposed_scope">
+        <item>com.android.systemui</item>
+        <item>com.android.settings</item>
+        <item>com.miui.home</item>
+        <item>com.android.launcher3</item>
+    </string-array>
+</resources>

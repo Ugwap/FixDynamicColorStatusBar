@@ -18,6 +18,13 @@
             android:name="xposedminversion"
             android:value="82" />
         <!--
+            Scope bawaan: System UI, Settings, dan Launcher langsung tercentang
+            otomatis saat modul di-enable di LSPosed Manager.
+        -->
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposed_scope" />
+        <!--
             Catatan: meta-data xposedsharedprefs sengaja TIDAK dipakai.
             Di ROM ini LSPosed mengalihkan SharedPreferences modul ke
             /data/misc/apexdata dan SELinux menolak penulisannya, sehingga

@@ -114,18 +114,18 @@ public class MainActivity extends Activity {
 
         box.addView(body(
                 "1. Buka LSPosed Manager.\n"
-                        + "2. Aktifkan modul Dynamic Status Bar.\n"
-                        + "3. Centang aplikasi yang ikonnya bermasalah "
-                        + "(misalnya Pengaturan/Settings, Launcher, System UI).\n"
-                        + "4. Force stop aplikasi itu, lalu buka lagi.\n"
-                        + "5. Kalau belum berubah, reboot HP.",
+                        + "2. Matikan lalu aktifkan lagi modul Dynamic Status Bar "
+                        + "agar scope bawaan diterapkan.\n"
+                        + "3. System UI, Settings, dan Launcher otomatis tercentang. "
+                        + "Tambahkan aplikasi lain kalau perlu.\n"
+                        + "4. Force stop aplikasi yang di-scope, atau reboot HP.\n"
+                        + "5. Buka lagi aplikasinya - ikon harus sudah ikut warna latar.",
                 dp));
 
         box.addView(body(
-                "Catatan: System UI dan Launcher sebaiknya juga dicentang supaya "
-                        + "layar recents ikut benar. Kalau setelah dicentang justru "
-                        + "ada aplikasi yang salah warna, matikan lagi centang untuk "
-                        + "aplikasi tersebut.",
+                "Kalau scope masih kosong setelah di-enable ulang, centang manual: "
+                        + "System UI (com.android.systemui), Settings "
+                        + "(com.android.settings), dan Launcher (com.miui.home).",
                 dp));
 
         box.addView(header("Kalau tidak ada efek", dp));
