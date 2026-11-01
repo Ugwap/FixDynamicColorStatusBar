@@ -8,7 +8,9 @@ import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -22,14 +24,13 @@ import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.TypedValue;
+import android.view.PixelCopy;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsetsController;
 
 import java.lang.ref.WeakReference;
-import java.util.Collections;
-import java.util.Set;
 import java.util.WeakHashMap;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -76,8 +77,7 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static Looper sIpcLooper;
 
     /** Untuk membatasi log supaya tidak membanjiri logcat. */
-    private static final Set<Activity> sLogged =
-            Collections.newSetFromMap(new WeakHashMap<Activity, Boolean>());
+    private static final WeakHashMap<Activity, String> sLastDecision = new WeakHashMap<>();
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -168,39 +168,141 @@ public class HookEntry implements IXposedHookLoadPackage {
         }, 400L);
     }
 
-    private static void applyNow(Activity activity) {
+    private static void applyNow(final Activity activity) {
         try {
             int mode = mode();
             if (mode == MODE_OFF) return;
 
-            boolean light;
-            String source;
-
             if (mode == MODE_DARK) {
-                light = true;
-                source = "mode selalu gelap";
-            } else if (mode == MODE_LIGHT) {
-                light = false;
-                source = "mode selalu terang";
-            } else {
-                Detected detected = detect(activity);
-                if (detected.light == null) {
-                    logOnce(activity, LOG + ": " + activity.getClass().getName()
-                            + " - latar tidak bisa dipastikan, dibiarkan");
-                    return;
-                }
-                light = detected.light;
-                source = detected.source;
+                setAppearance(activity, true, nav());
+                logDecision(activity, true, "mode selalu gelap");
+                return;
+            }
+            if (mode == MODE_LIGHT) {
+                setAppearance(activity, false, nav());
+                logDecision(activity, false, "mode selalu terang");
+                return;
             }
 
-            setAppearance(activity, light, nav());
-            logOnce(activity, LOG + ": " + activity.getPackageName() + "/"
-                    + activity.getClass().getSimpleName()
-                    + " -> ikon " + (light ? "gelap" : "terang")
-                    + " (" + source + ")");
+            Detected detected = detect(activity);
+            if (detected.light != null) {
+                setAppearance(activity, detected.light, nav());
+                logDecision(activity, detected.light, detected.source);
+            }
+
+            // Kalau status bar transparan, warna theme sering tidak sama dengan
+            // yang benar-benar terlihat. Ambil sampel piksel asli di area bar
+            // lalu koreksi kalau hasilnya berbeda.
+            if (detected.sample) {
+                sampleAndRefine(activity);
+            }
         } catch (Throwable t) {
             XposedBridge.log(LOG + ": terapkan gagal: " + t);
         }
+    }
+
+    /**
+     * Baca warna piksel asli di area status bar (di belakang jam/ikon).
+     * Hasilnya menggantikan tebakan dari atribut theme kalau pikselnya solid.
+     */
+    private static void sampleAndRefine(final Activity activity) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        Window window = activity.getWindow();
+        if (window == null) return;
+        View decor = window.getDecorView();
+        if (decor == null) return;
+
+        int width = decor.getWidth();
+        int height = decor.getHeight();
+        if (width <= 0 || height <= 0) return;
+
+        int sampleWidth = Math.max(8, Math.min(64, width / 10));
+        int left = Math.max(0, (width - sampleWidth) / 2);
+        int sampleHeight = Math.max(2, Math.min(10, height / 40));
+        int top = Math.min(2, Math.max(0, height - sampleHeight));
+        if (left + sampleWidth > width || top + sampleHeight > height) return;
+
+        final Bitmap bitmap;
+        try {
+            bitmap = Bitmap.createBitmap(sampleWidth, sampleHeight, Bitmap.Config.ARGB_8888);
+        } catch (Throwable t) {
+            return;
+        }
+
+        try {
+            PixelCopy.request(window,
+                    new Rect(left, top, left + sampleWidth, top + sampleHeight),
+                    bitmap,
+                    new PixelCopy.OnPixelCopyFinishedListener() {
+                        @Override
+                        public void onPixelCopyFinished(int result) {
+                            handleSample(activity, bitmap, result);
+                        }
+                    },
+                    new Handler(Looper.getMainLooper()));
+        } catch (Throwable t) {
+            try {
+                bitmap.recycle();
+            } catch (Throwable ignored) {
+                // Sudah tidak dipakai.
+            }
+        }
+    }
+
+    private static void handleSample(final Activity activity, Bitmap bitmap, int result) {
+        int decision = -1;
+        String source = null;
+
+        try {
+            if (result == PixelCopy.SUCCESS) {
+                long red = 0;
+                long green = 0;
+                long blue = 0;
+                int opaque = 0;
+                int total = 0;
+
+                for (int x = 0; x < bitmap.getWidth(); x++) {
+                    for (int y = 0; y < bitmap.getHeight(); y++) {
+                        total++;
+                        int color = bitmap.getPixel(x, y);
+                        if (Color.alpha(color) < 250) continue;
+                        red += Color.red(color);
+                        green += Color.green(color);
+                        blue += Color.blue(color);
+                        opaque++;
+                    }
+                }
+
+                // Kalau sebagian besar piksel transparan, area bar tidak digambar
+                // aplikasi (misalnya wallpaper di belakang launcher); jangan menebak.
+                if (opaque >= Math.max(1, total / 2)) {
+                    int average = Color.rgb((int) (red / opaque),
+                            (int) (green / opaque), (int) (blue / opaque));
+                    decision = Color.luminance(average) > LIGHT_THRESHOLD ? 1 : 0;
+                    source = "piksel " + hex(average);
+                }
+            }
+        } catch (Throwable ignored) {
+            // Gagal membaca sampel; hasil deteksi theme tetap dipakai.
+        } finally {
+            try {
+                bitmap.recycle();
+            } catch (Throwable ignored) {
+                // Sudah tidak dipakai.
+            }
+        }
+
+        if (decision < 0) return;
+
+        final boolean light = decision == 1;
+        final String from = source;
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                setAppearance(activity, light, nav());
+                logDecision(activity, light, from);
+            }
+        });
     }
 
     private static void setAppearance(Activity activity, boolean light, boolean includeNav) {
@@ -233,9 +335,8 @@ public class HookEntry implements IXposedHookLoadPackage {
     }
 
     /**
-     * Cari tahu apakah latar di balik status bar terang.
-     * Urutan: warna status bar -> background decor -> windowBackground theme
-     * -> colorBackground theme -> atribut windowLightStatusBar.
+     * Tebakan awal dari atribut window/theme. Kalau status bar transparan,
+     * hasil ini nanti dikoreksi oleh {@link #sampleAndRefine(Activity)}.
      */
     private static Detected detect(Activity activity) {
         Window window = activity.getWindow();
@@ -245,7 +346,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             int color = window.getStatusBarColor();
             if (Color.alpha(color) == 255) {
                 return new Detected(Color.luminance(color) > LIGHT_THRESHOLD,
-                        "statusBar " + hex(color));
+                        "statusBar " + hex(color), false);
             }
         } catch (Throwable ignored) {
             // Di beberapa ROM getStatusBarColor bisa melempar; lanjut ke cara lain.
@@ -256,15 +357,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             Integer color = solidColor(decor.getBackground());
             if (color != null) {
                 return new Detected(Color.luminance(color) > LIGHT_THRESHOLD,
-                        "decor " + hex(color));
-            }
-
-            // Banyak aplikasi memakai status bar transparan dan mengandalkan
-            // background root content view; itu yang sebenarnya terlihat.
-            Integer content = contentColor(decor);
-            if (content != null) {
-                return new Detected(Color.luminance(content) > LIGHT_THRESHOLD,
-                        "content " + hex(content));
+                        "decor " + hex(color), true);
             }
         }
 
@@ -275,7 +368,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             if (theme.resolveAttribute(android.R.attr.windowBackground, value, true)) {
                 if (isColorValue(value)) {
                     return new Detected(Color.luminance(value.data) > LIGHT_THRESHOLD,
-                            "windowBackground " + hex(value.data));
+                            "windowBackground " + hex(value.data), true);
                 }
                 if (value.resourceId != 0) {
                     try {
@@ -284,12 +377,22 @@ public class HookEntry implements IXposedHookLoadPackage {
                         Integer color = solidColor(drawable);
                         if (color != null) {
                             return new Detected(Color.luminance(color) > LIGHT_THRESHOLD,
-                                    "windowBackground " + hex(color));
+                                    "windowBackground " + hex(color), true);
                         }
                     } catch (Throwable ignored) {
                         // Resource tidak bisa dibuka; coba atribut berikutnya.
                     }
                 }
+            }
+        } catch (Throwable ignored) {
+            // Lanjut ke windowLightStatusBar.
+        }
+
+        // Permintaan eksplisit aplikasi: true = ikon gelap di latar terang.
+        try {
+            if (theme.resolveAttribute(android.R.attr.windowLightStatusBar, value, true)) {
+                boolean light = value.data != 0;
+                return new Detected(light, "windowLightStatusBar=" + light, true);
             }
         } catch (Throwable ignored) {
             // Lanjut ke colorBackground.
@@ -299,19 +402,10 @@ public class HookEntry implements IXposedHookLoadPackage {
             if (theme.resolveAttribute(android.R.attr.colorBackground, value, true)
                     && isColorValue(value)) {
                 return new Detected(Color.luminance(value.data) > LIGHT_THRESHOLD,
-                        "colorBackground " + hex(value.data));
+                        "colorBackground " + hex(value.data), true);
             }
         } catch (Throwable ignored) {
-            // Lanjut ke windowLightStatusBar.
-        }
-
-        try {
-            if (theme.resolveAttribute(android.R.attr.windowLightStatusBar, value, true)) {
-                boolean light = value.data != 0;
-                return new Detected(light, "windowLightStatusBar=" + light);
-            }
-        } catch (Throwable ignored) {
-            // Tidak ada informasi.
+            // Tidak ada informasi lain.
         }
 
         // Mode malam bisa jadi petunjuk terakhir, tapi jangan menebak terlalu
@@ -319,38 +413,15 @@ public class HookEntry implements IXposedHookLoadPackage {
         int night = activity.getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_MASK;
         if (night == Configuration.UI_MODE_NIGHT_YES) {
-            return new Detected(false, "mode malam");
+            return new Detected(false, "mode malam", true);
         }
 
-        return Detected.UNKNOWN;
+        return new Detected(null, "tidak diketahui", true);
     }
 
     private static boolean isColorValue(TypedValue value) {
         return value.type >= TypedValue.TYPE_FIRST_COLOR_INT
                 && value.type <= TypedValue.TYPE_LAST_COLOR_INT;
-    }
-
-    /**
-     * Warna latar root content view (satu atau dua tingkat dari decor).
-     * Dipakai saat status bar transparan dan decor tidak punya background.
-     */
-    private static Integer contentColor(View decor) {
-        try {
-            View content = decor.findViewById(android.R.id.content);
-            if (content == null) return null;
-            Integer color = solidColor(content.getBackground());
-            if (color != null) return color;
-            if (content instanceof ViewGroup) {
-                ViewGroup group = (ViewGroup) content;
-                for (int i = group.getChildCount() - 1; i >= 0; i--) {
-                    color = solidColor(group.getChildAt(i).getBackground());
-                    if (color != null) return color;
-                }
-            }
-        } catch (Throwable ignored) {
-            // Abaikan; deteksi lanjut ke atribut theme.
-        }
-        return null;
     }
 
     /** Ambil warna solid dari drawable (termasuk pembungkus yang umum dipakai theme). */
@@ -398,11 +469,15 @@ public class HookEntry implements IXposedHookLoadPackage {
         return String.format("#%08X", color);
     }
 
-    private static void logOnce(Activity activity, String message) {
+    private static void logDecision(Activity activity, boolean light, String source) {
         if (activity == null) return;
-        if (sLogged.add(activity)) {
-            XposedBridge.log(message);
-        }
+        String key = light + "|" + source;
+        if (key.equals(sLastDecision.get(activity))) return;
+        sLastDecision.put(activity, key);
+        XposedBridge.log(LOG + ": " + activity.getPackageName() + "/"
+                + activity.getClass().getSimpleName()
+                + " -> ikon " + (light ? "gelap" : "terang")
+                + " (" + source + ")");
     }
 
     /**
@@ -446,7 +521,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                     if (mode != sMode || nav != sNav) {
                         sMode = mode;
                         sNav = nav;
-                        sLogged.clear();
+                        sLastDecision.clear();
                         XposedBridge.log(LOG + ": config mode=" + mode + " navbar=" + nav);
                         reapplyLast();
                     }
@@ -493,14 +568,17 @@ public class HookEntry implements IXposedHookLoadPackage {
 
     /** Hasil deteksi latar; light == null berarti tidak diketahui. */
     private static final class Detected {
-        static final Detected UNKNOWN = new Detected(null, "tidak diketahui");
+        static final Detected UNKNOWN = new Detected(null, "tidak diketahui", false);
 
         final Boolean light;
         final String source;
+        /** True kalau area status bar perlu diambil sampel pikselnya. */
+        final boolean sample;
 
-        Detected(Boolean light, String source) {
+        Detected(Boolean light, String source, boolean sample) {
             this.light = light;
             this.source = source;
+            this.sample = sample;
         }
     }
 }

@@ -13,11 +13,13 @@ tidak terlihat.
 1. **Deteksi latar per aplikasi** — setiap Activity yang tampil dicek latar
    di balik status bar dengan urutan:
    - warna status bar (`Window.getStatusBarColor`), kalau solid;
+   - **sampel piksel asli** di area status bar (`PixelCopy`) — ini yang
+     menentukan warna sebenarnya, termasuk untuk aplikasi bertema terang yang
+     isinya gelap;
    - background decor view;
-   - background root content view;
    - atribut theme `windowBackground` (termasuk drawable solid/gradient);
-   - atribut theme `colorBackground`;
    - atribut `windowLightStatusBar` sebagai cadangan;
+   - atribut `colorBackground`;
    - mode malam (hanya untuk memastikan latar gelap).
 
    Kalau latar tidak bisa dipastikan, modul **tidak mengubah apa pun** supaya
