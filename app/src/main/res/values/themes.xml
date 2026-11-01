@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.DynamicStatusBar" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">#4FC3F7</item>
+        <item name="android:colorAccent">#4FC3F7</item>
+        <item name="android:windowBackground">#FF101010</item>
+        <item name="android:statusBarColor">#FF101010</item>
+        <item name="android:navigationBarColor">#FF101010</item>
+    </style>
+</resources>

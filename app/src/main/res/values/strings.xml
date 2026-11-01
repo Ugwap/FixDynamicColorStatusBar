@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dynamic Status Bar</string>
+    <string name="xposed_description">Ikon jam, sinyal &amp; baterai otomatis gelap saat latar terang.</string>
+</resources>
