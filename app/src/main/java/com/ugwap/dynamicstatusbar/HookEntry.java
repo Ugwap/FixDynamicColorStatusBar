@@ -1,10 +1,12 @@
 package com.ugwap.dynamicstatusbar;
 
 import android.app.Activity;
+import android.app.Application;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.content.res.ColorStateList;
@@ -62,6 +64,14 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final int DEFAULT_MODE = ConfigReceiver.DEFAULT_MODE;
     private static final boolean DEFAULT_NAV = ConfigReceiver.DEFAULT_NAV;
 
+    /**
+     * Launcher punya logika wallpaper sendiri di HyperOS (dan sampling kita
+     * di sana tidak selalu akurat karena wallpaper digambar di window lain).
+     * Jadi dalam mode dinamis kita tidak memaksa warna di launcher: cukup
+     * lepas paksaan dan biarkan MIUI yang menentukan.
+     */
+    private static final String LAUNCHER_PKG = "com.miui.home";
+
     /** Ambang luminance: di atas ini dianggap latar terang (ikon gelap). */
     private static final float LIGHT_THRESHOLD = 0.55f;
 
@@ -76,6 +86,18 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static WeakReference<Activity> sLastActivity;
     private static Looper sIpcLooper;
 
+    // ---- Sisi SystemUI ----
+    private static volatile Object sLightBarController;
+    private static volatile Boolean sOverrideLight;
+    private static volatile long sOverrideAt;
+    private static volatile Boolean sLastApplied;
+    private static volatile boolean sApplyFailed;
+    private static Handler sMainHandler;
+
+    // ---- Sisi aplikasi ----
+    private static String sLastSentKey;
+    private static long sLastSentAt;
+
     /** Untuk membatasi log supaya tidak membanjiri logcat. */
     private static final WeakHashMap<Activity, String> sLastDecision = new WeakHashMap<>();
 
@@ -86,11 +108,161 @@ public class HookEntry implements IXposedHookLoadPackage {
         // berisiko; paket modul sendiri tidak perlu di-hook.
         if (pkg == null || "android".equals(pkg) || ConfigReceiver.PKG.equals(pkg)) return;
 
+        if ("com.android.systemui".equals(pkg)) {
+            try {
+                hookSystemUi(lpparam);
+            } catch (Throwable t) {
+                XposedBridge.log(LOG + ": gagal hook SystemUI: " + t);
+            }
+            return;
+        }
+
         try {
             hookActivity(lpparam);
         } catch (Throwable t) {
             XposedBridge.log(LOG + ": gagal hook " + pkg + ": " + t);
         }
+    }
+
+    /**
+     * Sisi SystemUI: menerima kabar terang/gelap dari aplikasi yang tampil,
+     * lalu memasang warna ikon langsung ke pipeline HyperOS
+     * (LightBarController -> DarkIconDispatcher -> LightBarTransitionsController).
+     *
+     * Ini menutup celah ketika WindowManager tidak mengirim ulang appearance
+     * (mis. sesudah recents atau sesudah SystemUI restart), yang membuat ikon
+     * nyangkut putih.
+     */
+    private static void hookSystemUi(XC_LoadPackage.LoadPackageParam lpparam) {
+        ClassLoader cl = lpparam.classLoader;
+
+        Class<?> controller = XposedHelpers.findClass(
+                "com.android.systemui.statusbar.phone.LightBarControllerImpl", cl);
+        XposedBridge.hookAllMethods(controller, "start", new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                sLightBarController = param.thisObject;
+            }
+        });
+        XposedBridge.hookAllMethods(controller, "updateStatus", new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                // Kalau MIUI baru saja menghitung ulang (dan bisa saja memakai
+                // appearance basi), tegakkan lagi keputusan aplikasi yang tampil.
+                if (overrideFresh()) {
+                    Boolean light = sOverrideLight;
+                    if (light != null) applyIconColor(light.booleanValue());
+                }
+            }
+        });
+
+        XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                registerIconReceiver((Context) param.thisObject);
+            }
+        });
+
+        XposedBridge.log(LOG + ": hook SystemUI terpasang");
+    }
+
+    private static void registerIconReceiver(Context context) {
+        if (context == null) return;
+        BroadcastReceiver receiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context ctx, Intent intent) {
+                if (intent == null) return;
+                try {
+                    if (intent.getBooleanExtra(ConfigReceiver.KEY_CLEAR, false)) {
+                        sOverrideLight = null;
+                        Object controller = sLightBarController;
+                        if (controller != null) {
+                            XposedHelpers.callMethod(controller, "reevaluate");
+                        }
+                        XposedBridge.log(LOG + "[sysui]: paksaan dilepas");
+                        return;
+                    }
+
+                    boolean light = intent.getBooleanExtra(ConfigReceiver.KEY_LIGHT, false);
+                    String from = intent.getStringExtra(ConfigReceiver.KEY_PKG);
+                    sOverrideLight = Boolean.valueOf(light);
+                    sOverrideAt = SystemClock.elapsedRealtime();
+
+                    final boolean target = light;
+                    mainHandler().post(new Runnable() {
+                        @Override
+                        public void run() {
+                            applyIconColor(target);
+                        }
+                    });
+                    // Ulangi sekali lagi; HyperOS kadang menimpa tepat sesudah
+                    // transisi window selesai.
+                    mainHandler().postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            applyIconColor(target);
+                        }
+                    }, 400L);
+
+                    if (!Boolean.valueOf(light).equals(sLastApplied)) {
+                        sLastApplied = Boolean.valueOf(light);
+                        XposedBridge.log(LOG + "[sysui]: ikon "
+                                + (light ? "gelap" : "terang") + " dari " + from);
+                    }
+                } catch (Throwable t) {
+                    XposedBridge.log(LOG + "[sysui]: gagal terapkan: " + t);
+                }
+            }
+        };
+
+        IntentFilter filter = new IntentFilter(ConfigReceiver.ACTION_ICON);
+        if (Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            context.registerReceiver(receiver, filter);
+        }
+        XposedBridge.log(LOG + "[sysui]: penerima status bar siap");
+    }
+
+    private static boolean overrideFresh() {
+        Boolean light = sOverrideLight;
+        return light != null && SystemClock.elapsedRealtime() - sOverrideAt < 1500L;
+    }
+
+    private static void applyIconColor(boolean light) {
+        Object controller = sLightBarController;
+        if (controller == null) return;
+        try {
+            Object dispatcher = XposedHelpers.getObjectField(controller, "mStatusBarIconController");
+            if (dispatcher == null) return;
+            Object transitions = XposedHelpers.getObjectField(dispatcher, "mTransitionsController");
+            if (transitions == null) return;
+
+            // Semua area ikon memakai satu warna.
+            try {
+                XposedHelpers.callMethod(dispatcher, "setIconsDarkArea",
+                        new Class[]{java.util.ArrayList.class}, new Object[]{null});
+            } catch (Throwable ignored) {
+                // Versi lain mungkin memakai nama/tipe berbeda.
+            }
+
+            // light == true berarti latar terang -> ikon gelap.
+            XposedHelpers.callMethod(transitions, "setIconsDark",
+                    new Class[]{boolean.class, boolean.class, boolean.class},
+                    new Object[]{Boolean.valueOf(light), Boolean.FALSE, Boolean.TRUE});
+        } catch (Throwable t) {
+            if (!sApplyFailed) {
+                sApplyFailed = true;
+                XposedBridge.log(LOG + "[sysui]: hook warna gagal: " + t);
+            }
+        }
+    }
+
+    private static Handler mainHandler() {
+        if (sMainHandler == null) {
+            sMainHandler = new Handler(Looper.getMainLooper());
+        }
+        return sMainHandler;
     }
 
     private static void hookActivity(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -171,16 +343,29 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static void applyNow(final Activity activity) {
         try {
             int mode = mode();
-            if (mode == MODE_OFF) return;
+            if (mode == MODE_OFF) {
+                notifySystemUiClear(activity);
+                return;
+            }
 
             if (mode == MODE_DARK) {
                 setAppearance(activity, true, nav());
+                notifySystemUi(activity, true);
                 logDecision(activity, true, "mode selalu gelap");
                 return;
             }
             if (mode == MODE_LIGHT) {
                 setAppearance(activity, false, nav());
+                notifySystemUi(activity, false);
                 logDecision(activity, false, "mode selalu terang");
+                return;
+            }
+
+            // Launcher sudah punya logika warna wallpaper sendiri di HyperOS.
+            // Jangan ditimpa: sampling piksel kita di sana bisa terbaca salah
+            // (wallpaper digambar di window lain) dan membuat ikon nyangkut.
+            if (LAUNCHER_PKG.equals(activity.getPackageName())) {
+                notifySystemUiClear(activity);
                 return;
             }
 
@@ -189,6 +374,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                 setAppearance(activity, detected.light, nav());
                 logDecision(activity, detected.light, detected.source);
             }
+            notifyDynamic(activity, detected.light);
 
             // Kalau status bar transparan, warna theme sering tidak sama dengan
             // yang benar-benar terlihat. Ambil sampel piksel asli di area bar
@@ -300,9 +486,65 @@ public class HookEntry implements IXposedHookLoadPackage {
             @Override
             public void run() {
                 setAppearance(activity, light, nav());
+                notifyDynamic(activity, light);
                 logDecision(activity, light, from);
             }
         });
+    }
+
+    /**
+     * Mode dinamis: kirim keputusan hanya kalau latar diketahui dan bukan
+     * launcher. Selain itu lepas paksaan supaya logika bawaan HyperOS
+     * (mis. wallpaper launcher) yang bekerja.
+     */
+    private static void notifyDynamic(Context context, Boolean light) {
+        if (context == null) return;
+        String pkg = context.getPackageName();
+        if (light == null || LAUNCHER_PKG.equals(pkg)) {
+            notifySystemUiClear(context);
+            return;
+        }
+        notifySystemUi(context, light.booleanValue());
+    }
+
+    /**
+     * Kabari SystemUI tentang warna latar yang sedang tampil. Di-throttle
+     * supaya beberapa panggilan beruntun untuk keadaan yang sama tidak
+     * membanjiri broadcast, tetapi tetap dikirim ulang setelah jeda agar
+     * state SystemUI yang hilang (sesudah restart/recents) bisa dipulihkan.
+     */
+    private static void notifySystemUi(Context context, boolean light) {
+        if (context == null) return;
+        try {
+            long now = SystemClock.elapsedRealtime();
+            String key = light + "|" + context.getPackageName();
+            if (key.equals(sLastSentKey) && now - sLastSentAt < 800L) return;
+            sLastSentKey = key;
+            sLastSentAt = now;
+
+            Intent intent = new Intent(ConfigReceiver.ACTION_ICON);
+            intent.putExtra(ConfigReceiver.KEY_LIGHT, light);
+            intent.putExtra(ConfigReceiver.KEY_PKG, context.getPackageName());
+            context.sendBroadcast(intent);
+        } catch (Throwable t) {
+            XposedBridge.log(LOG + ": kirim state ke SystemUI gagal: " + t);
+        }
+    }
+
+    private static void notifySystemUiClear(Context context) {
+        if (context == null) return;
+        try {
+            long now = SystemClock.elapsedRealtime();
+            if ("clear".equals(sLastSentKey) && now - sLastSentAt < 1500L) return;
+            sLastSentKey = "clear";
+            sLastSentAt = now;
+
+            Intent intent = new Intent(ConfigReceiver.ACTION_ICON);
+            intent.putExtra(ConfigReceiver.KEY_CLEAR, true);
+            context.sendBroadcast(intent);
+        } catch (Throwable ignored) {
+            // Mode mati; tidak ada yang perlu dilakukan.
+        }
     }
 
     private static void setAppearance(Activity activity, boolean light, boolean includeNav) {

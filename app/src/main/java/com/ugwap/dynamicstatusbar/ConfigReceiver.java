@@ -22,6 +22,20 @@ public class ConfigReceiver extends BroadcastReceiver {
     public static final String ACTION = "com.ugwap.dynamicstatusbar.action.GET_CONFIG";
     public static final String COMPONENT = PKG + ".ConfigReceiver";
 
+    /**
+     * Kabar dari proses aplikasi ke SystemUI: "latar yang sedang tampil
+     * terang/gelap, tolong pasang ikon yang sesuai".
+     *
+     * Ini perlu karena WindowManager HyperOS kadang tidak mengirim ulang
+     * appearance saat aplikasi kembali ke depan (mis. sesudah recents atau
+     * sesudah SystemUI restart), sehingga SystemUI memakai state lama dan
+     * ikon nyangkut putih.
+     */
+    public static final String ACTION_ICON = "com.ugwap.dynamicstatusbar.action.ICON_STATE";
+    public static final String KEY_LIGHT = "light";          // true = latar terang, ikon gelap
+    public static final String KEY_CLEAR = "clear";          // true = lepas paksaan, serahkan ke sistem
+    public static final String KEY_PKG = "from_pkg";
+
     public static final String PREFS_NAME = "dynamicstatusbar";
     public static final String KEY_MODE = "mode";           // 0=dinamis, 1=selalu gelap, 2=selalu terang, 3=mati
     public static final String KEY_NAV = "include_nav";      // juga atur ikon navigation bar
