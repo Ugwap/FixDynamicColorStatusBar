@@ -32,10 +32,15 @@ tidak terlihat.
    Appearance dipasang ulang setelah frame pertama dan 400 ms kemudian,
    karena sebagian aplikasi memasang appearance-nya sendiri di akhir.
 
-3. **Navigation bar opsional** — ikon navigation bar bisa ikut menyesuaikan
+3. **Kanal langsung ke SystemUI** — keputusan terang/gelap juga dikirim ke
+   SystemUI. Jadi kalau WindowManager tidak mengirim ulang appearance
+   (misalnya sesudah recents atau sesudah SystemUI restart), ikon tetap
+   mengikuti latar aplikasi dan tidak nyangkut putih.
+
+4. **Navigation bar opsional** — ikon navigation bar bisa ikut menyesuaikan
    atau dibiarkan apa adanya.
 
-4. **Opsi sembunyikan ikon** aplikasi modul dari home screen. Modul tetap
+5. **Opsi sembunyikan ikon** aplikasi modul dari home screen. Modul tetap
    aktif dan tetap terdaftar di LSPosed Manager.
 
 ## Mode pewarnaan
@@ -50,7 +55,7 @@ tidak terlihat.
 ## Pasang
 
 ```powershell
-adb install -r FixDynamicColorStatusBar-v1.0.0.apk
+adb install -r FixDynamicColorStatusBar-v1.0.3.apk
 ```
 
 Lalu di **LSPosed Manager**:
