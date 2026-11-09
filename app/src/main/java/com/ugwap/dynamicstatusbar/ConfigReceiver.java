@@ -34,6 +34,7 @@ public class ConfigReceiver extends BroadcastReceiver {
     public static final String ACTION_ICON = "com.ugwap.dynamicstatusbar.action.ICON_STATE";
     public static final String KEY_LIGHT = "light";          // true = latar terang, ikon gelap
     public static final String KEY_CLEAR = "clear";          // true = lepas paksaan, serahkan ke sistem
+    public static final String KEY_FORGET = "forget";        // true = hapus state tersimpan saja
     public static final String KEY_PKG = "from_pkg";
 
     public static final String PREFS_NAME = "dynamicstatusbar";

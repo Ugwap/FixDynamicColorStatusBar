@@ -7,6 +7,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.content.res.ColorStateList;
@@ -93,6 +94,14 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static volatile Boolean sLastApplied;
     private static volatile boolean sApplyFailed;
     private static Handler sMainHandler;
+    private static Context sSysuiContext;
+
+    /** State terakhir disimpan supaya bisa dipulihkan setelah SystemUI restart. */
+    private static final String PREFS_SYSUI = "dynamicstatusbar_sysui";
+    private static final String PREF_HAS = "has";
+    private static final String PREF_LIGHT = "light";
+    private static final String PREF_AT = "at";
+    private static final long STORED_MAX_AGE_MS = 3 * 60 * 1000L;
 
     // ---- Sisi aplikasi ----
     private static String sLastSentKey;
@@ -142,6 +151,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 sLightBarController = param.thisObject;
+                applyStoredState();
             }
         });
         XposedBridge.hookAllMethods(controller, "updateStatus", new XC_MethodHook() {
@@ -168,13 +178,25 @@ public class HookEntry implements IXposedHookLoadPackage {
 
     private static void registerIconReceiver(Context context) {
         if (context == null) return;
+        Context app = context.getApplicationContext();
+        sSysuiContext = app != null ? app : context;
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context ctx, Intent intent) {
                 if (intent == null) return;
                 try {
+                    sSysuiContext = ctx.getApplicationContext();
+                    if (intent.getBooleanExtra(ConfigReceiver.KEY_FORGET, false)) {
+                        boolean had = hasStoredState();
+                        saveStoredState(null);
+                        if (had) {
+                            XposedBridge.log(LOG + "[sysui]: lupakan state tersimpan");
+                        }
+                        return;
+                    }
                     if (intent.getBooleanExtra(ConfigReceiver.KEY_CLEAR, false)) {
                         sOverrideLight = null;
+                        saveStoredState(null);
                         Object controller = sLightBarController;
                         if (controller != null) {
                             XposedHelpers.callMethod(controller, "reevaluate");
@@ -187,6 +209,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                     String from = intent.getStringExtra(ConfigReceiver.KEY_PKG);
                     sOverrideLight = Boolean.valueOf(light);
                     sOverrideAt = SystemClock.elapsedRealtime();
+                    saveStoredState(Boolean.valueOf(light));
 
                     final boolean target = light;
                     mainHandler().post(new Runnable() {
@@ -227,6 +250,74 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static boolean overrideFresh() {
         Boolean light = sOverrideLight;
         return light != null && SystemClock.elapsedRealtime() - sOverrideAt < 1500L;
+    }
+
+    private static boolean hasStoredState() {
+        Context context = sSysuiContext;
+        if (context == null) return false;
+        try {
+            return context.getSharedPreferences(PREFS_SYSUI, Context.MODE_PRIVATE)
+                    .getBoolean(PREF_HAS, false);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static void saveStoredState(Boolean light) {
+        Context context = sSysuiContext;
+        if (context == null) return;
+        try {
+            SharedPreferences.Editor editor = context
+                    .getSharedPreferences(PREFS_SYSUI, Context.MODE_PRIVATE).edit();
+            if (light == null) {
+                editor.putBoolean(PREF_HAS, false);
+            } else {
+                editor.putBoolean(PREF_HAS, true);
+                editor.putBoolean(PREF_LIGHT, light.booleanValue());
+                editor.putLong(PREF_AT, SystemClock.elapsedRealtime());
+            }
+            editor.apply();
+        } catch (Throwable ignored) {
+            // Kalau penyimpanan ditolak, pemulihan setelah restart dilewati.
+        }
+    }
+
+    /**
+     * SystemUI baru dimulai: pakai lagi keputusan terakhir kalau masih baru.
+     * Umur dibatasi dan memakai elapsedRealtime, jadi state dari sebelum
+     * reboot (yang jamnya sudah reset) tidak dipakai.
+     */
+    private static void applyStoredState() {
+        Context context = sSysuiContext;
+        if (context == null) return;
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREFS_SYSUI, Context.MODE_PRIVATE);
+            if (!prefs.getBoolean(PREF_HAS, false)) return;
+
+            long at = prefs.getLong(PREF_AT, 0L);
+            long now = SystemClock.elapsedRealtime();
+            if (at <= 0L || now < at || now - at > STORED_MAX_AGE_MS) return;
+
+            final boolean light = prefs.getBoolean(PREF_LIGHT, false);
+            sOverrideLight = Boolean.valueOf(light);
+            sOverrideAt = now;
+            mainHandler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    applyIconColor(light);
+                }
+            }, 600L);
+            mainHandler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    applyIconColor(light);
+                }
+            }, 1800L);
+            XposedBridge.log(LOG + "[sysui]: pulihkan state terakhir (ikon "
+                    + (light ? "gelap" : "terang") + ")");
+        } catch (Throwable ignored) {
+            // Tidak ada state tersimpan.
+        }
     }
 
     private static void applyIconColor(boolean light) {
@@ -311,6 +402,14 @@ public class HookEntry implements IXposedHookLoadPackage {
             sLastActivity = new WeakReference<>(activity);
             reloadPrefs(activity);
 
+            if (mode() == MODE_DYNAMIC && LAUNCHER_PKG.equals(pkg)) {
+                // Launcher memakai logika wallpaper HyperOS; jangan ditimpa.
+                // Cukup lupakan state tersimpan supaya SystemUI tidak
+                // memulihkan warna aplikasi lama saat home sedang tampil.
+                forgetStoredState(activity);
+                return;
+            }
+
             // onResume/onPostResume bisa dijalankan sebelum aplikasi selesai
             // memasang appearance-nya sendiri, jadi terapkan lagi setelah frame
             // pertama dan sekali lagi sedikit lebih lambat.
@@ -335,9 +434,24 @@ public class HookEntry implements IXposedHookLoadPackage {
         decor.postDelayed(new Runnable() {
             @Override
             public void run() {
-                applyNow(activity);
+                // Jangan kirim keputusan basi kalau activity ini sudah tidak
+                // terlihat (mis. pengguna sudah pindah ke aplikasi lain).
+                if (windowVisible(activity)) applyNow(activity);
             }
         }, 400L);
+    }
+
+    private static boolean windowVisible(Activity activity) {
+        try {
+            if (activity == null || activity.isFinishing()) return false;
+            Window window = activity.getWindow();
+            if (window == null) return false;
+            View decor = window.getDecorView();
+            return decor != null && decor.isShown()
+                    && decor.getWindowVisibility() == View.VISIBLE;
+        } catch (Throwable ignored) {
+            return true;
+        }
     }
 
     private static void applyNow(final Activity activity) {
@@ -365,7 +479,6 @@ public class HookEntry implements IXposedHookLoadPackage {
             // Jangan ditimpa: sampling piksel kita di sana bisa terbaca salah
             // (wallpaper digambar di window lain) dan membuat ikon nyangkut.
             if (LAUNCHER_PKG.equals(activity.getPackageName())) {
-                notifySystemUiClear(activity);
                 return;
             }
 
@@ -479,6 +592,7 @@ public class HookEntry implements IXposedHookLoadPackage {
         }
 
         if (decision < 0) return;
+        if (!windowVisible(activity)) return;
 
         final boolean light = decision == 1;
         final String from = source;
@@ -544,6 +658,28 @@ public class HookEntry implements IXposedHookLoadPackage {
             context.sendBroadcast(intent);
         } catch (Throwable ignored) {
             // Mode mati; tidak ada yang perlu dilakukan.
+        }
+    }
+
+    /**
+     * Hapus state tersimpan tanpa menyentuh warna ikon yang sedang berjalan.
+     * Dipakai launcher: saat home tampil, state aplikasi sebelumnya sudah tidak
+     * relevan untuk dipulihkan kalau SystemUI restart.
+     */
+    private static void forgetStoredState(Context context) {
+        if (context == null) return;
+        try {
+            long now = SystemClock.elapsedRealtime();
+            if ("forget".equals(sLastSentKey) && now - sLastSentAt < 5000L) return;
+            sLastSentKey = "forget";
+            sLastSentAt = now;
+
+            Intent intent = new Intent(ConfigReceiver.ACTION_ICON);
+            intent.putExtra(ConfigReceiver.KEY_FORGET, true);
+            intent.putExtra(ConfigReceiver.KEY_PKG, context.getPackageName());
+            context.sendBroadcast(intent);
+        } catch (Throwable ignored) {
+            // Tidak fatal; state tersimpan hanya akan dipakai kalau masih baru.
         }
     }
 

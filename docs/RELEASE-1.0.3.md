@@ -26,15 +26,30 @@ Membuka ulang aplikasi dari awal biasanya benar, sehingga bug terlihat
   recents diserahkan ke logika wallpaper bawaan HyperOS, karena sampling
   piksel di launcher bisa membaca warna yang salah (wallpaper digambar di
   window lain).
+- **State terakhir disimpan** di SharedPreferences SystemUI. Saat SystemUI
+  dimulai ulang, state dipulihkan dalam ±0,6 detik supaya status bar tidak
+  sempat putih. Umur state dibatasi 3 menit dan memakai `elapsedRealtime`,
+  jadi state dari sebelum reboot tidak dipakai.
+- **Launcher melupakan state tersimpan** (`KEY_FORGET`) saat home tampil,
+  supaya SystemUI tidak memulihkan warna aplikasi lama ketika yang terlihat
+  adalah wallpaper.
 - **Mode Mati** melepas paksaan dan mengembalikan kendali ke sistem.
 
 ### Hasil uji di perangkat
 
 - Settings dibuka dari awal: ikon gelap.
 - SystemUI dimatikan saat Settings di depan, lalu SystemUI hidup lagi:
-  ikon kembali gelap (sebelumnya nyangkut putih).
+  ikon kembali gelap (sebelumnya nyangkut putih). Tanpa state tersimpan pun
+  WindowManager akhirnya mengirim appearance yang benar, tetapi butuh ±16
+  detik; state tersimpan mempercepatnya menjadi ±2 detik.
 - Home dengan wallpaper gelap: ikon putih (ditangani HyperOS).
 - Recents lalu kembali ke Settings: ikon gelap.
+- Settings mode gelap (`cmd uimode night yes`): ikon putih.
+- Kembali ke mode terang: ikon gelap lagi.
+- Layar pengaturan modul sendiri selalu gelap (#101010) dengan teks terang,
+  tidak ikut tema terang/gelap sistem.
+- Mode "Selalu gelap" dan "Selalu terang" langsung berlaku pada aplikasi
+  yang dibuka berikutnya.
 
 ### Pasang
 
