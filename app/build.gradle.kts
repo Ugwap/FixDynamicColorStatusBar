@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id("com.android.application")
 }
 
@@ -10,8 +10,8 @@ android {
         applicationId = "com.ugwap.dynamicstatusbar"
         minSdk = 29
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 6
+        versionName = "1.0.5"
     }
 
     buildTypes {

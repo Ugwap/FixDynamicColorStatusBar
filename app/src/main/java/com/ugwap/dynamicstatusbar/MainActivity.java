@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
     private static final String PREFS_NAME = ConfigReceiver.PREFS_NAME;
     private static final String KEY_MODE = ConfigReceiver.KEY_MODE;
     private static final String KEY_NAV = ConfigReceiver.KEY_NAV;
+    private static final String KEY_HOME_WHITE = ConfigReceiver.KEY_HOME_WHITE;
 
     private SharedPreferences prefs;
     private Switch hideSwitch;
@@ -93,6 +94,37 @@ public class MainActivity extends Activity {
                         + "pada aplikasi yang dicentang di scope LSPosed.",
                 dp));
 
+        box.addView(header("Home screen", dp));
+
+        Switch homeSwitch = new Switch(this);
+        homeSwitch.setText("Ikon status bar tetap putih di home screen");
+        homeSwitch.setTextColor(Color.WHITE);
+        homeSwitch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        homeSwitch.setPadding(0, Math.round(8 * dp), 0, Math.round(4 * dp));
+        homeSwitch.setChecked(prefs.getBoolean(KEY_HOME_WHITE,
+                ConfigReceiver.DEFAULT_HOME_WHITE));
+        homeSwitch.setOnCheckedChangeListener((view, checked) -> {
+            prefs.edit().putBoolean(KEY_HOME_WHITE, checked).apply();
+            // SystemUI langsung tahu tanpa menunggu pembacaan berkala.
+            Intent intent = new Intent(ConfigReceiver.ACTION_ICON);
+            intent.putExtra(KEY_HOME_WHITE, checked);
+            sendBroadcast(intent);
+            Toast.makeText(this, checked
+                            ? "Home screen tetap putih"
+                            : "Warna home screen diserahkan ke HyperOS",
+                    Toast.LENGTH_SHORT).show();
+        });
+        box.addView(homeSwitch);
+
+        box.addView(body(
+                "Kalau aktif, jam/sinyal/baterai di home screen selalu putih, "
+                        + "apa pun warna wallpapermu. Fitur ini diproses di System UI, "
+                        + "jadi Launcher tidak perlu dicentang di scope.\n\n"
+                        + "Kalau dimatikan, warna ikon di home screen diserahkan "
+                        + "sepenuhnya ke HyperOS. Di wallpaper gelap ikon bisa "
+                        + "tertinggal gelap - itu perilaku bawaan HyperOS, bukan bug modul.",
+                dp));
+
         box.addView(header("Navigation bar", dp));
 
         Switch navSwitch = new Switch(this);
@@ -116,16 +148,17 @@ public class MainActivity extends Activity {
                 "1. Buka LSPosed Manager.\n"
                         + "2. Matikan lalu aktifkan lagi modul Dynamic Status Bar "
                         + "agar scope bawaan diterapkan.\n"
-                        + "3. System UI, Settings, dan Launcher otomatis tercentang. "
-                        + "Tambahkan aplikasi lain kalau perlu.\n"
+                        + "3. Pastikan System UI dan Settings tercentang. Tambahkan "
+                        + "aplikasi lain yang ingin ikonnya ikut menyesuaikan.\n"
                         + "4. Force stop aplikasi yang di-scope, atau reboot HP.\n"
                         + "5. Buka lagi aplikasinya - ikon harus sudah ikut warna latar.",
                 dp));
 
         box.addView(body(
                 "Kalau scope masih kosong setelah di-enable ulang, centang manual: "
-                        + "System UI (com.android.systemui), Settings "
-                        + "(com.android.settings), dan Launcher (com.miui.home).",
+                        + "System UI (com.android.systemui) dan Settings "
+                        + "(com.android.settings). Launcher tidak perlu dicentang - "
+                        + "warna ikon di home screen diatur dari System UI.",
                 dp));
 
         box.addView(header("Kalau tidak ada efek", dp));

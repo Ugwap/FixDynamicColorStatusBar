@@ -3,11 +3,69 @@
     <!--
         Scope bawaan modul (meta-data xposedscope). LSPosed otomatis
         mencentang aplikasi di daftar ini saat modul di-enable.
+
+        System UI wajib, karena warna ikon home screen dan kanal langsung
+        aplikasi -> SystemUI diproses di sana. Settings ikut supaya layar
+        pengaturan langsung benar. Launcher tidak lagi dipakai untuk fitur
+        home screen (prosesnya dijalankan hyos_spawner, modul tidak dimuat),
+        tetapi tetap didaftarkan untuk kompatibilitas.
     -->
     <string-array name="xposed_scope">
         <item>com.android.systemui</item>
         <item>com.android.settings</item>
         <item>com.miui.home</item>
         <item>com.android.launcher3</item>
+
+        <!-- Aplikasi pihak ketiga yang terpasang di perangkat uji -->
+        <item>app.morphe.android.apps.youtube.music</item>
+        <item>app.revanced.android.gms</item>
+        <item>app.revanced.android.youtube</item>
+        <item>bin.mt.plus.canary</item>
+        <item>com.android.chrome</item>
+        <item>com.anthropic.claude</item>
+        <item>com.apps.MyXL</item>
+        <item>com.brave.browser</item>
+        <item>com.camera.lmc88r2</item>
+        <item>com.coderstory.toolkit</item>
+        <item>com.facebook.katana</item>
+        <item>com.garena.game.codm</item>
+        <item>com.github.android</item>
+        <item>com.github.zyl6932.HyperMusicCover</item>
+        <item>com.google.android.apps.authenticator2</item>
+        <item>com.google.android.apps.bard</item>
+        <item>com.google.android.apps.docs</item>
+        <item>com.google.android.apps.photos</item>
+        <item>com.google.android.apps.translate</item>
+        <item>com.google.android.contactkeys</item>
+        <item>com.google.android.safetycore</item>
+        <item>com.google.ar.core</item>
+        <item>com.google.chromeremotedesktop</item>
+        <item>com.handycloset.android.eraser</item>
+        <item>com.heytap.headset</item>
+        <item>com.hinnka.mycamera</item>
+        <item>com.imaginstudio.imagetools.pixellab</item>
+        <item>com.mxtech.videoplayer.ad</item>
+        <item>com.orion.store</item>
+        <item>com.photoroom.app</item>
+        <item>com.pinterest</item>
+        <item>com.reddit.frontpage</item>
+        <item>com.roblox.client</item>
+        <item>com.ugwap.dynamicstatusbar</item>
+        <item>com.ugwap.hyperosclockanim</item>
+        <item>com.whatsapp</item>
+        <item>de.dertyp7214.rboardpatcher</item>
+        <item>de.dertyp7214.rboardthemecreator</item>
+        <item>de.dertyp7214.rboardthememanager</item>
+        <item>dev.hyperios.app</item>
+        <item>idm.internet.download.manager.plus</item>
+        <item>io.github.a13e300.ksuwebui</item>
+        <item>io.github.vvb2060.magisk</item>
+        <item>io.github.yixing233.hyperduo</item>
+        <item>jp.konami.pesam</item>
+        <item>org.chromium.webapk.af4154460fd97da49_v2</item>
+        <item>org.chromium.webapk.af4e40bdbac8fa9a7_v2</item>
+        <item>org.lsposed.manager</item>
+        <item>ru.zdevs.zarchiver</item>
+        <item>tw.nekomimi.nekogram</item>
     </string-array>
 </resources>

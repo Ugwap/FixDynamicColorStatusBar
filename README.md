@@ -40,7 +40,19 @@ tidak terlihat.
 4. **Navigation bar opsional** — ikon navigation bar bisa ikut menyesuaikan
    atau dibiarkan apa adanya.
 
-5. **Opsi sembunyikan ikon** aplikasi modul dari home screen. Modul tetap
+5. **Home screen tetap putih (opsional)** — kalau diaktifkan, jam/sinyal/
+   baterai di home screen selalu putih, apa pun warna wallpaper. Launcher
+   HyperOS di ROM ini dijalankan lewat `/system_ext/bin/hyos_spawner`
+   (preload launcher), sehingga modul LSPosed tidak bisa di-hook di proses
+   `com.miui.home`. Karena itu fitur ini diproses di **System UI**: aplikasi
+   teratas dipantau tiap 500 ms, dan saat home screen tampil ikon dipaksa
+   terang. Toggle-nya ada di layar modul dan langsung berlaku (broadcast).
+
+   Kalau toggle dimatikan, warna ikon di home screen diserahkan sepenuhnya
+   ke HyperOS — di wallpaper gelap ikon bisa tertinggal gelap, itu perilaku
+   bawaan ROM.
+
+6. **Opsi sembunyikan ikon** aplikasi modul dari home screen. Modul tetap
    aktif dan tetap terdaftar di LSPosed Manager.
 
 ## Mode pewarnaan
@@ -55,18 +67,18 @@ tidak terlihat.
 ## Pasang
 
 ```powershell
-adb install -r FixDynamicColorStatusBar-v1.0.3.apk
+adb install -r FixDynamicColorStatusBar-v1.0.5.apk
 ```
 
 Lalu di **LSPosed Manager**:
 
 1. **Matikan lalu aktifkan lagi** modul **Dynamic Status Bar**. Scope bawaan
-   (`xposedscope`) otomatis mencentang **System UI**, **Settings**, dan
-   **Launcher**.
-2. Tambahkan aplikasi lain kalau perlu.
+   (`xposedscope`) otomatis mencentang **System UI** dan **Settings**.
+2. Tambahkan aplikasi lain yang ikonnya ingin ikut menyesuaikan warna.
+   Launcher tidak perlu dicentang — warna home screen diatur dari System UI.
 3. Force stop aplikasi yang di-scope, atau reboot HP.
-4. Kalau scope tetap kosong, centang manual: `com.android.systemui`,
-   `com.android.settings`, `com.miui.home`.
+4. Kalau scope tetap kosong, centang manual: `com.android.systemui` dan
+   `com.android.settings`.
 
 Perubahan setting di layar modul berlaku saat aplikasi dibuka ulang.
 
@@ -80,8 +92,9 @@ Contoh baris yang diharapkan:
 
 ```
 DynStatusBar: hook Activity terpasang di com.android.settings
-DynStatusBar: config mode=0 navbar=true
+DynStatusBar: config mode=0 navbar=true homeWhite=true
 DynStatusBar: com.android.settings/SettingsHomeActivity -> ikon gelap (content #FFFFFFFF)
+DynStatusBar[sysui]: home screen -> ikon terang
 ```
 
 Kalau ada aplikasi yang salah warna, kirim baris log `-> ikon ... (sumber)`

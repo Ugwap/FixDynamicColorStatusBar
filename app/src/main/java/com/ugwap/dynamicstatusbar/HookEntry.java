@@ -1,7 +1,9 @@
 package com.ugwap.dynamicstatusbar;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.Application;
+import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -25,6 +27,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.PixelCopy;
@@ -34,6 +37,7 @@ import android.view.Window;
 import android.view.WindowInsetsController;
 
 import java.lang.ref.WeakReference;
+import java.util.List;
 import java.util.WeakHashMap;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -78,6 +82,7 @@ public class HookEntry implements IXposedHookLoadPackage {
 
     private static int sMode = -1;
     private static boolean sNav = DEFAULT_NAV;
+    private static boolean sHomeWhite = ConfigReceiver.DEFAULT_HOME_WHITE;
 
     private static long sPrefsCheckedAt;
     private static long sRetryAfter;
@@ -95,6 +100,16 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static volatile boolean sApplyFailed;
     private static Handler sMainHandler;
     private static Context sSysuiContext;
+
+    /**
+     * Launcher HyperOS di HP ini dijalankan oleh /system_ext/bin/hyos_spawner
+     * (preload launcher), sehingga LSPosed tidak memuat modul di proses
+     * com.miui.home. Karena itu "home screen tetap putih" diputuskan dari
+     * SystemUI: pantau aplikasi teratas lewat getRunningTasks.
+     */
+    private static final long HOME_POLL_MS = 500L;
+    private static volatile boolean sHomeWatchStarted;
+    private static String sHomeAppliedPkg;
 
     /** State terakhir disimpan supaya bisa dipulihkan setelah SystemUI restart. */
     private static final String PREFS_SYSUI = "dynamicstatusbar_sysui";
@@ -186,6 +201,23 @@ public class HookEntry implements IXposedHookLoadPackage {
                 if (intent == null) return;
                 try {
                     sSysuiContext = ctx.getApplicationContext();
+                    if (intent.hasExtra(ConfigReceiver.KEY_HOME_WHITE)) {
+                        boolean enabled = intent.getBooleanExtra(
+                                ConfigReceiver.KEY_HOME_WHITE,
+                                ConfigReceiver.DEFAULT_HOME_WHITE);
+                        sHomeWhite = enabled;
+                        sHomeAppliedPkg = null;
+                        if (!enabled) {
+                            sOverrideLight = null;
+                            saveStoredState(null);
+                            Object controller = sLightBarController;
+                            if (controller != null) {
+                                XposedHelpers.callMethod(controller, "reevaluate");
+                            }
+                        }
+                        XposedBridge.log(LOG + "[sysui]: home putih=" + enabled);
+                        return;
+                    }
                     if (intent.getBooleanExtra(ConfigReceiver.KEY_FORGET, false)) {
                         boolean had = hasStoredState();
                         saveStoredState(null);
@@ -196,6 +228,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                     }
                     if (intent.getBooleanExtra(ConfigReceiver.KEY_CLEAR, false)) {
                         sOverrideLight = null;
+                        sHomeAppliedPkg = null;
                         saveStoredState(null);
                         Object controller = sLightBarController;
                         if (controller != null) {
@@ -245,6 +278,100 @@ public class HookEntry implements IXposedHookLoadPackage {
             context.registerReceiver(receiver, filter);
         }
         XposedBridge.log(LOG + "[sysui]: penerima status bar siap");
+        reloadPrefs(sSysuiContext);
+        startHomeWatch(sSysuiContext);
+    }
+
+    /**
+     * Pantau aplikasi teratas. Kalau yang tampil home screen dan pengguna
+     * memilih "home screen tetap putih", paksa ikon terang. Ini menggantikan
+     * hook launcher yang tidak mungkin dipasang di HyperOS.
+     */
+    private static void startHomeWatch(Context context) {
+        if (context == null || sHomeWatchStarted) return;
+        sHomeWatchStarted = true;
+        final Context app = context.getApplicationContext() != null
+                ? context.getApplicationContext() : context;
+        final Handler handler = mainHandler();
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    watchHomeOnce(app);
+                } catch (Throwable ignored) {
+                    // Polling tidak boleh mematikan SystemUI.
+                }
+                handler.postDelayed(this, HOME_POLL_MS);
+            }
+        }, HOME_POLL_MS);
+    }
+
+    private static void watchHomeOnce(Context context) {
+        // Ikut menyegarkan pengaturan supaya toggle langsung berpengaruh.
+        reloadPrefs(context);
+
+        if (!interactive(context)) return;
+        String top = topPackage(context);
+        if (top == null) return;
+
+        if (!LAUNCHER_PKG.equals(top)) {
+            sHomeAppliedPkg = null;
+            return;
+        }
+        if (mode() != MODE_DYNAMIC || !homeWhite()) {
+            sHomeAppliedPkg = null;
+            return;
+        }
+        if (keyguardShowing(context)) return;
+
+        // Selalu segarkan waktu override selama home tampil, supaya
+        // LightBarController tidak menimpanya dengan appearance basi.
+        sOverrideLight = Boolean.FALSE;
+        sOverrideAt = SystemClock.elapsedRealtime();
+        if (LAUNCHER_PKG.equals(sHomeAppliedPkg)) return;
+
+        saveStoredState(Boolean.FALSE);
+        applyIconColor(false);
+        if (sLightBarController != null) {
+            sHomeAppliedPkg = LAUNCHER_PKG;
+            XposedBridge.log(LOG + "[sysui]: home screen -> ikon terang");
+        }
+    }
+
+    private static boolean interactive(Context context) {
+        try {
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            return pm == null || pm.isInteractive();
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private static boolean keyguardShowing(Context context) {
+        try {
+            KeyguardManager km =
+                    (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
+            return km != null && km.isKeyguardLocked();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String topPackage(Context context) {
+        try {
+            ActivityManager am =
+                    (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return null;
+            List<ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(1);
+            if (tasks == null || tasks.isEmpty()) return null;
+            ActivityManager.RunningTaskInfo info = tasks.get(0);
+            if (info.topActivity != null) return info.topActivity.getPackageName();
+            if (info.baseActivity != null) return info.baseActivity.getPackageName();
+        } catch (Throwable ignored) {
+            // Tanpa izin/tugas tidak tersedia; coba lagi di putaran berikutnya.
+        }
+        return null;
     }
 
     private static boolean overrideFresh() {
@@ -403,10 +530,16 @@ public class HookEntry implements IXposedHookLoadPackage {
             reloadPrefs(activity);
 
             if (mode() == MODE_DYNAMIC && LAUNCHER_PKG.equals(pkg)) {
-                // Launcher memakai logika wallpaper HyperOS; jangan ditimpa.
-                // Cukup lupakan state tersimpan supaya SystemUI tidak
-                // memulihkan warna aplikasi lama saat home sedang tampil.
-                forgetStoredState(activity);
+                if (homeWhite()) {
+                    // Pengguna minta home screen selalu putih; tetap jadwalkan
+                    // penerapan supaya keputusan itu dikirim ke SystemUI.
+                    scheduleApply(activity);
+                } else {
+                    // Launcher memakai logika wallpaper HyperOS; jangan ditimpa.
+                    // Cukup lupakan state tersimpan supaya SystemUI tidak
+                    // memulihkan warna aplikasi lama saat home sedang tampil.
+                    forgetStoredState(activity);
+                }
                 return;
             }
 
@@ -476,9 +609,14 @@ public class HookEntry implements IXposedHookLoadPackage {
             }
 
             // Launcher sudah punya logika warna wallpaper sendiri di HyperOS.
-            // Jangan ditimpa: sampling piksel kita di sana bisa terbaca salah
-            // (wallpaper digambar di window lain) dan membuat ikon nyangkut.
+            // Kalau pengguna memilih "home screen tetap putih", paksa ikon
+            // terang di sana; kalau tidak, jangan ditimpa sama sekali.
             if (LAUNCHER_PKG.equals(activity.getPackageName())) {
+                if (homeWhite()) {
+                    setAppearance(activity, false, nav());
+                    notifySystemUi(activity, false);
+                    logDecision(activity, false, "home screen tetap putih");
+                }
                 return;
             }
 
@@ -889,6 +1027,8 @@ public class HookEntry implements IXposedHookLoadPackage {
 
                     int mode = extras.getInt(ConfigReceiver.KEY_MODE, DEFAULT_MODE);
                     boolean nav = extras.getBoolean(ConfigReceiver.KEY_NAV, DEFAULT_NAV);
+                    boolean homeWhite = extras.getBoolean(ConfigReceiver.KEY_HOME_WHITE,
+                            ConfigReceiver.DEFAULT_HOME_WHITE);
                     mode = Math.max(MODE_DYNAMIC, Math.min(mode, MODE_OFF));
 
                     if (sQueryFailed) {
@@ -896,11 +1036,13 @@ public class HookEntry implements IXposedHookLoadPackage {
                         XposedBridge.log(LOG + ": pengaturan modul terbaca lagi");
                     }
 
-                    if (mode != sMode || nav != sNav) {
+                    if (mode != sMode || nav != sNav || homeWhite != sHomeWhite) {
                         sMode = mode;
                         sNav = nav;
+                        sHomeWhite = homeWhite;
                         sLastDecision.clear();
-                        XposedBridge.log(LOG + ": config mode=" + mode + " navbar=" + nav);
+                        XposedBridge.log(LOG + ": config mode=" + mode
+                                + " navbar=" + nav + " homeWhite=" + homeWhite);
                         reapplyLast();
                     }
                 }
@@ -942,6 +1084,10 @@ public class HookEntry implements IXposedHookLoadPackage {
 
     private static boolean nav() {
         return sNav;
+    }
+
+    private static boolean homeWhite() {
+        return sHomeWhite;
     }
 
     /** Hasil deteksi latar; light == null berarti tidak diketahui. */

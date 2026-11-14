@@ -40,14 +40,17 @@ public class ConfigReceiver extends BroadcastReceiver {
     public static final String PREFS_NAME = "dynamicstatusbar";
     public static final String KEY_MODE = "mode";           // 0=dinamis, 1=selalu gelap, 2=selalu terang, 3=mati
     public static final String KEY_NAV = "include_nav";      // juga atur ikon navigation bar
+    public static final String KEY_HOME_WHITE = "home_white"; // home screen selalu ikon putih
     public static final int DEFAULT_MODE = 0;
     public static final boolean DEFAULT_NAV = true;
+    public static final boolean DEFAULT_HOME_WHITE = true;
 
     @Override
     public void onReceive(Context context, Intent intent) {
         Bundle result = new Bundle();
         result.putInt(KEY_MODE, readMode(context));
         result.putBoolean(KEY_NAV, readNav(context));
+        result.putBoolean(KEY_HOME_WHITE, readHomeWhite(context));
 
         // Hanya berpengaruh kalau dipanggil lewat ordered broadcast.
         setResultCode(Activity.RESULT_OK);
@@ -64,5 +67,9 @@ public class ConfigReceiver extends BroadcastReceiver {
 
     public static boolean readNav(Context context) {
         return prefs(context).getBoolean(KEY_NAV, DEFAULT_NAV);
+    }
+
+    public static boolean readHomeWhite(Context context) {
+        return prefs(context).getBoolean(KEY_HOME_WHITE, DEFAULT_HOME_WHITE);
     }
 }
